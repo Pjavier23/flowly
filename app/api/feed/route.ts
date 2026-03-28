@@ -58,8 +58,14 @@ async function fetchRSS(topic: string, url: string): Promise<Article[]> {
       const link = getField('link') || itemXml.match(/href="([^"]+)"/)?.[1] || ''
       const pubDate = getField('pubDate') || getField('published') || getField('updated') || new Date().toISOString()
       const description = getField('description') || getField('summary') || getField('content')
-      const imgMatch = description.match(/src="([^"]+\.(jpg|jpeg|png|webp)[^"]*)"/i)
-      const thumbnail = getField('enclosure')?.match(/url="([^"]+)"/)?.[1] || imgMatch?.[1]
+      // Try multiple image sources
+      const enclosureUrl = itemXml.match(/enclosure[^>]+url="([^"]+)"/i)?.[1]
+      const mediaContent = itemXml.match(/media:content[^>]+url="([^"]+)"/i)?.[1] || 
+                           itemXml.match(/media:thumbnail[^>]+url="([^"]+)"/i)?.[1]
+      const imgMatch = description.match(/src="([^"]+\.(jpg|jpeg|png|webp|gif)[^"]*)"/i)
+      const thumbnail = enclosureUrl?.match(/\.(jpg|jpeg|png|webp|gif)/i) ? enclosureUrl :
+                        mediaContent?.match(/\.(jpg|jpeg|png|webp|gif)/i) ? mediaContent :
+                        imgMatch?.[1]
 
       items.push({
         id: `rss-${topic}-${Math.random().toString(36).slice(2)}`,

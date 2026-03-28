@@ -107,33 +107,57 @@ export default function ArticleCard({ article, variant, isSaved, onSave }: Props
     return (
       <div
         onClick={handleClick}
-        className="feed-card relative rounded-xl overflow-hidden cursor-pointer bg-white/5 border border-white/8 p-3 select-none"
+        className="feed-card relative rounded-xl overflow-hidden cursor-pointer bg-white/5 border border-white/8 select-none flex flex-col"
       >
-        {/* Emoji icon */}
-        <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${topic?.gradient || 'from-gray-700 to-gray-800'} flex items-center justify-center text-xl mb-2`}>
-          {topic?.emoji || '📰'}
+        {/* Image or gradient */}
+        <div className="relative w-full h-28 overflow-hidden flex-shrink-0">
+          {article.thumbnail ? (
+            <>
+              <img
+                src={article.thumbnail}
+                alt=""
+                className="absolute inset-0 w-full h-full object-cover"
+                onError={(e) => {
+                  const img = e.target as HTMLImageElement
+                  img.style.display = 'none'
+                  const fallback = img.nextElementSibling as HTMLElement
+                  if (fallback) fallback.style.display = 'flex'
+                }}
+              />
+              <div
+                className={`absolute inset-0 bg-gradient-to-br ${topic?.gradient || 'from-gray-700 to-gray-800'} items-center justify-center text-3xl hidden`}
+              >
+                {topic?.emoji || '📰'}
+              </div>
+            </>
+          ) : (
+            <div className={`absolute inset-0 bg-gradient-to-br ${topic?.gradient || 'from-gray-700 to-gray-800'} flex items-center justify-center text-3xl`}>
+              {topic?.emoji || '📰'}
+            </div>
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+          {topic && (
+            <span className={`absolute bottom-2 left-2 text-[9px] font-bold px-2 py-0.5 rounded-full ${topic.tag}`}>
+              {topic.label}
+            </span>
+          )}
         </div>
 
-        {/* Topic tag */}
-        {topic && (
-          <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${topic.tag} mb-1.5 inline-block`}>
-            {topic.label}
-          </span>
-        )}
-
-        <h3 className="text-xs font-semibold leading-tight line-clamp-3 mb-2 text-white/90">
-          {article.title}
-        </h3>
-
-        <div className="flex items-center justify-between mt-auto">
-          <span className="text-[10px] text-white/30">{ta}</span>
-          <button
-            data-save-btn
-            onClick={handleSave}
-            className={`text-[10px] transition-colors ${isSaved ? 'text-yellow-400' : 'text-white/20 hover:text-white/50'}`}
-          >
-            {isSaved ? '★' : '☆'}
-          </button>
+        {/* Text */}
+        <div className="p-2.5 flex flex-col flex-1">
+          <h3 className="text-xs font-semibold leading-tight line-clamp-3 mb-2 text-white/90 flex-1">
+            {article.title}
+          </h3>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-white/30">{ta}</span>
+            <button
+              data-save-btn
+              onClick={handleSave}
+              className={`text-[10px] transition-colors ${isSaved ? 'text-yellow-400' : 'text-white/20 hover:text-white/50'}`}
+            >
+              {isSaved ? '★' : '☆'}
+            </button>
+          </div>
         </div>
       </div>
     )
