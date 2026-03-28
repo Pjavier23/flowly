@@ -1,60 +1,103 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Parser from 'rss-parser'
 import { RSS_FEEDS, REDDIT_FEEDS, getTopicById } from '@/lib/topics'
 import { Article } from '@/lib/types'
 
-const parser = new Parser({
-  timeout: 8000,
-  headers: {
-    'User-Agent': 'Mozilla/5.0 (compatible; Flowly/1.0)',
-  },
-})
+export const runtime = 'nodejs'
+export const maxDuration = 30
+export const revalidate = 300 // cache 5 min
+
+function shuffle<T>(arr: T[]): T[] {
+  return [...arr].sort(() => Math.random() - 0.5)
+}
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const m = Math.floor(diff / 60000)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
+async function fetchWithTimeout(url: string, timeout = 6000): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeout)
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Flowly/1.0; +https://flowly-pi.vercel.app)' },
+      next: { revalidate: 300 },
+    })
+    return res
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 async function fetchRSS(topic: string, url: string): Promise<Article[]> {
   try {
-    const feed = await parser.parseURL(url)
-    return (feed.items || []).slice(0, 8).map((item, i) => ({
-      id: `rss-${topic}-${i}-${Date.now()}-${Math.random()}`,
-      title: item.title || 'Untitled',
-      url: item.link || item.guid || '#',
-      source: feed.title || new URL(url).hostname,
-      topic,
-      publishedAt: item.pubDate || item.isoDate || new Date().toISOString(),
-      thumbnail: item.enclosure?.url || extractImageFromContent(item.content || item.contentSnippet || ''),
-      emoji: getTopicById(topic)?.emoji || '📰',
-      summary: item.contentSnippet?.slice(0, 150) || item.content?.replace(/<[^>]+>/g, '').slice(0, 150),
-      type: 'rss' as const,
-    }))
+    const res = await fetchWithTimeout(url)
+    if (!res.ok) return []
+    const text = await res.text()
+
+    // Parse XML manually (no rss-parser needed, avoids bundling issues)
+    const items: Article[] = []
+    const itemMatches = text.match(/<item>([\s\S]*?)<\/item>/g) || 
+                        text.match(/<entry>([\s\S]*?)<\/entry>/g) || []
+    
+    const channelTitle = text.match(/<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/)?.[1]?.trim() || new URL(url).hostname
+
+    for (const itemXml of itemMatches.slice(0, 8)) {
+      const getField = (tag: string) => {
+        const m = itemXml.match(new RegExp(`<${tag}[^>]*>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/${tag}>`, 'i'))
+        return m?.[1]?.trim() || ''
+      }
+      const title = getField('title')
+      if (!title) continue
+
+      const link = getField('link') || itemXml.match(/href="([^"]+)"/)?.[1] || ''
+      const pubDate = getField('pubDate') || getField('published') || getField('updated') || new Date().toISOString()
+      const description = getField('description') || getField('summary') || getField('content')
+      const imgMatch = description.match(/src="([^"]+\.(jpg|jpeg|png|webp)[^"]*)"/i)
+      const thumbnail = getField('enclosure')?.match(/url="([^"]+)"/)?.[1] || imgMatch?.[1]
+
+      items.push({
+        id: `rss-${topic}-${Math.random().toString(36).slice(2)}`,
+        title: title.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#039;/g, "'").replace(/&quot;/g, '"'),
+        url: link,
+        source: channelTitle,
+        topic,
+        publishedAt: pubDate,
+        thumbnail,
+        emoji: getTopicById(topic)?.emoji || '📰',
+        summary: description.replace(/<[^>]+>/g, '').slice(0, 150).trim(),
+        type: 'rss' as const,
+      })
+    }
+    return items
   } catch {
     return []
   }
 }
 
-function extractImageFromContent(content: string): string | undefined {
-  const match = content.match(/<img[^>]+src="([^"]+)"/i)
-  return match ? match[1] : undefined
-}
-
 async function fetchReddit(topic: string, url: string): Promise<Article[]> {
   try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Flowly/1.0)' },
-      next: { revalidate: 300 },
-    })
+    const res = await fetchWithTimeout(url + '&raw_json=1')
     if (!res.ok) return []
     const data = await res.json()
     const posts = data?.data?.children || []
     return posts
-      .filter((p: { data: { stickied?: boolean; title?: string } }) => !p.data.stickied && p.data.title)
-      .slice(0, 8)
-      .map((p: { data: { id: string; title: string; url: string; permalink: string; subreddit_name_prefixed: string; created_utc: number; thumbnail?: string; score: number; num_comments: number; selftext?: string } }, i: number) => ({
-        id: `reddit-${topic}-${p.data.id || i}`,
+      .filter((p: any) => !p.data.stickied && p.data.title && p.data.score > 10)
+      .slice(0, 6)
+      .map((p: any) => ({
+        id: `reddit-${topic}-${p.data.id}`,
         title: p.data.title,
         url: p.data.url?.startsWith('http') ? p.data.url : `https://reddit.com${p.data.permalink}`,
         source: p.data.subreddit_name_prefixed || `r/${topic}`,
         topic,
         publishedAt: new Date(p.data.created_utc * 1000).toISOString(),
-        thumbnail: p.data.thumbnail?.startsWith('http') ? p.data.thumbnail : undefined,
+        thumbnail: p.data.thumbnail?.startsWith('http') ? p.data.thumbnail : 
+                   p.data.preview?.images?.[0]?.source?.url?.replace(/&amp;/g, '&'),
         emoji: getTopicById(topic)?.emoji || '🔴',
         summary: p.data.selftext?.slice(0, 150),
         upvotes: p.data.score,
@@ -66,31 +109,20 @@ async function fetchReddit(topic: string, url: string): Promise<Article[]> {
   }
 }
 
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr]
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]]
-  }
-  return a
-}
-
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
-  const topicsParam = searchParams.get('topics')
-  const topics = topicsParam ? topicsParam.split(',').filter(Boolean) : []
-
-  if (!topics.length) {
-    return NextResponse.json({ articles: [] })
-  }
+  const topicsParam = searchParams.get('topics') || 'world-news,tech,science'
+  const topics = topicsParam.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
 
   const allFetches: Promise<Article[]>[] = []
 
   for (const topic of topics) {
+    // RSS feeds
     const rssUrls = RSS_FEEDS[topic] || []
     for (const url of rssUrls) {
       allFetches.push(fetchRSS(topic, url))
     }
+    // Reddit
     const redditUrl = REDDIT_FEEDS[topic]
     if (redditUrl) {
       allFetches.push(fetchReddit(topic, redditUrl))
@@ -106,14 +138,17 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Sort by date, newest first, then shuffle a bit for variety
-  const sorted = articles.sort((a, b) => 
-    new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+  // Sort by date newest first
+  const sorted = articles
+    .filter(a => a.title && a.url && a.url !== '#')
+    .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
+
+  // Mix: top 5 pinned recent, rest shuffled for variety
+  const top = sorted.slice(0, 5)
+  const rest = shuffle(sorted.slice(5))
+
+  return NextResponse.json(
+    { articles: [...top, ...rest] },
+    { headers: { 'Cache-Control': 's-maxage=300, stale-while-revalidate=600' } }
   )
-
-  // Mix: keep top stories recent but shuffle the rest
-  const top = sorted.slice(0, 10)
-  const rest = shuffle(sorted.slice(10))
-
-  return NextResponse.json({ articles: [...top, ...rest] })
 }
