@@ -61,6 +61,13 @@ export default function Home() {
   }
 
   const handleLogout = async () => {
+    // Reset demo account preferences so next login shows onboarding again
+    if (user?.email === 'demo@flowly.app') {
+      await supabase
+        .from('flowly_preferences')
+        .delete()
+        .eq('user_id', user.id)
+    }
     await supabase.auth.signOut()
   }
 
